@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>盲人视觉辅助测试</title>
-    <!-- 换成了国内极其稳定的 unpkg 镜像 -->
     <script src="https://unpkg.com/@tensorflow/tfjs"></script>
     <script src="https://unpkg.com/@tensorflow-models/coco-ssd"></script>
     <style>
@@ -15,79 +14,84 @@
     </style>
 </head>
 <body>
-    <h2>视觉辅助眼镜 (软件测试版)</h2>
+    <h2>视觉辅助眼镜 (流畅版)</h2>
     <video id="webcam" autoplay playsinline muted></video>
     <div id="status">点击下方按钮启动摄像头...</div>
     <button onclick="start()">启动系统</button>
 
     <script>
         let isSpeaking = false;
-        let lastObject = "";
+        let lastSpokenTime = 0;
+        let lastSpokenText = "";
 
         async function start() {
             const statusDiv = document.getElementById('status');
             const video = document.getElementById('webcam');
 
+            // 1. 强制唤醒手机浏览器的语音引擎（关键！）
+            speak("视觉辅助系统已启动");
+
             try {
-                statusDiv.innerText = "正在加载轻量级 AI 模型（约10秒），请稍候...";
-                
-                // 打开摄像头 (强制后置摄像头)
+                statusDiv.innerText = "正在加载轻量级 AI 模型（约10秒）...";
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
                 video.srcObject = stream;
 
-                // 加载轻量级模型 lite_mobilenet_v2，速度极快
                 const model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+                statusDiv.innerText = "扫描中...";
 
-                statusDiv.innerText = "系统已启动，正在扫描周围...";
-                
-                // 开始实时检测
-                detectFrame(video, model);
+                // 2. 开启降频检测循环（每 600 毫秒检测一次，画面绝对不卡）
+                setInterval(() => {
+                    detectFrame(video, model);
+                }, 600);
 
             } catch (error) {
                 console.error(error);
-                statusDiv.innerText = "加载失败！请关闭 WiFi，使用手机流量刷新重试。";
+                statusDiv.innerText = "加载失败！请关闭 WiFi 使用流量刷新。";
             }
         }
 
         async function detectFrame(video, model) {
+            // 如果正在播报语音，就暂停检测，节省算力
+            if (isSpeaking) return;
+
             try {
                 const predictions = await model.detect(video);
                 
                 if (predictions.length > 0) {
-                    // 按置信度排序，取最确定的前 2 个物体，防止语音太吵
-                    const objects = predictions.slice(0, 2);
-                    let speakText = "前方发现：";
+                    // 只取置信度最高的一个物体，避免信息过载
+                    const bestObj = predictions[0];
                     
-                    objects.forEach(obj => {
-                        // 把英文标签翻译成简单的中文
-                        let chineseName = translate(obj.class);
-                        // 加上距离估算（粗略估算，物体框越大越近）
-                        let size = obj.bbox[2] * obj.bbox[3];
-                        let distance = size > 60000 ? "近处" : "远处";
-                        speakText += `${distance}有${chineseName}，`;
-                    });
+                    // 过滤掉没用的微小物体
+                    if (bestObj.score < 0.6) return;
 
-                    // 只有当识别到的物体和上次不同，且不在说话时才播报
-                    if (speakText !== lastObject && !isSpeaking) {
-                        document.getElementById('status').innerText = speakText;
-                        speak(speakText);
-                        lastObject = speakText;
+                    let chineseName = translate(bestObj.class);
+                    let speakText = `前方有${chineseName}`;
+
+                    // 3. 防抖机制：如果和上次说的一样，并且距离上次说话不到 3 秒，就不说
+                    const now = Date.now();
+                    if (speakText === lastSpokenText && now - lastSpokenTime < 3000) {
+                        return;
                     }
-                }
-            } catch (e) {
-                // 忽略单帧检测错误
-            }
 
-            // 持续循环
-            requestAnimationFrame(() => detectFrame(video, model));
+                    document.getElementById('status').innerText = speakText;
+                    speak(speakText);
+                    lastSpokenText = speakText;
+                    lastSpokenTime = now;
+                }
+            } catch (e) {}
         }
 
+        // 4. 安全的语音播报函数
         function speak(text) {
+            // 如果有正在播报的，立刻打断
+            window.speechSynthesis.cancel();
+
             isSpeaking = true;
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = 'zh-CN';
-            utterance.rate = 1.2; 
+            utterance.rate = 1.3; // 调快语速，像机器报点一样
             utterance.onend = () => { isSpeaking = false; };
+            utterance.onerror = () => { isSpeaking = false; }; // 防止报错卡死
             window.speechSynthesis.speak(utterance);
         }
 
