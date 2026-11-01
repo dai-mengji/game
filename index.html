@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>盲人视觉辅助测试</title>
-    <!-- 引入 TensorFlow 和 物体识别模型 -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <!-- 换成了国内极其稳定的 unpkg 镜像 -->
+    <script src="https://unpkg.com/@tensorflow/tfjs"></script>
+    <script src="https://unpkg.com/@tensorflow-models/coco-ssd"></script>
     <style>
         body { text-align: center; background: #000; color: #fff; font-family: sans-serif; margin: 0; padding: 10px; }
         video { width: 100%; max-width: 400px; border-radius: 10px; border: 2px solid #333; }
@@ -25,63 +25,72 @@
         let lastObject = "";
 
         async function start() {
-            document.getElementById('status').innerText = "正在加载 AI 模型，请稍候...";
+            const statusDiv = document.getElementById('status');
             const video = document.getElementById('webcam');
-            
-            // 1. 打开摄像头 (强制后置摄像头)
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-            video.srcObject = stream;
 
-            // 2. 加载物体识别模型 (COCO-SSD 轻量级模型，可识别80种日常物品)
-            const model = await cocoSsd.load();
+            try {
+                statusDiv.innerText = "正在加载轻量级 AI 模型（约10秒），请稍候...";
+                
+                // 打开摄像头 (强制后置摄像头)
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                video.srcObject = stream;
 
-            document.getElementById('status').innerText = "系统已启动，正在扫描周围...";
-            
-            // 3. 开始实时检测
-            detectFrame(video, model);
+                // 加载轻量级模型 lite_mobilenet_v2，速度极快
+                const model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+
+                statusDiv.innerText = "系统已启动，正在扫描周围...";
+                
+                // 开始实时检测
+                detectFrame(video, model);
+
+            } catch (error) {
+                console.error(error);
+                statusDiv.innerText = "加载失败！请关闭 WiFi，使用手机流量刷新重试。";
+            }
         }
 
         async function detectFrame(video, model) {
-            // 获取当前画面的预测结果
-            const predictions = await model.detect(video);
-            
-            if (predictions.length > 0) {
-                // 按置信度排序，取最确定的前 2 个物体，防止语音太吵
-                const objects = predictions.slice(0, 2);
-                let speakText = "前方发现：";
+            try {
+                const predictions = await model.detect(video);
                 
-                objects.forEach(obj => {
-                    // 把英文标签翻译成简单的中文（这里做个简易映射）
-                    let chineseName = translate(obj.class);
-                    // 加上距离估算（粗略估算，物体框越大越近）
-                    let size = obj.bbox[2] * obj.bbox[3];
-                    let distance = size > 60000 ? "近处" : "远处";
-                    speakText += `${distance}有${chineseName}，`;
-                });
+                if (predictions.length > 0) {
+                    // 按置信度排序，取最确定的前 2 个物体，防止语音太吵
+                    const objects = predictions.slice(0, 2);
+                    let speakText = "前方发现：";
+                    
+                    objects.forEach(obj => {
+                        // 把英文标签翻译成简单的中文
+                        let chineseName = translate(obj.class);
+                        // 加上距离估算（粗略估算，物体框越大越近）
+                        let size = obj.bbox[2] * obj.bbox[3];
+                        let distance = size > 60000 ? "近处" : "远处";
+                        speakText += `${distance}有${chineseName}，`;
+                    });
 
-                // 只有当识别到的物体和上次不同，且不在说话时才播报，防止一直疯狂重复
-                if (speakText !== lastObject && !isSpeaking) {
-                    document.getElementById('status').innerText = speakText;
-                    speak(speakText);
-                    lastObject = speakText;
+                    // 只有当识别到的物体和上次不同，且不在说话时才播报
+                    if (speakText !== lastObject && !isSpeaking) {
+                        document.getElementById('status').innerText = speakText;
+                        speak(speakText);
+                        lastObject = speakText;
+                    }
                 }
+            } catch (e) {
+                // 忽略单帧检测错误
             }
 
             // 持续循环
             requestAnimationFrame(() => detectFrame(video, model));
         }
 
-        // 语音合成函数
         function speak(text) {
             isSpeaking = true;
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = 'zh-CN';
-            utterance.rate = 1.2; // 语速快一点，紧急情况能保命
+            utterance.rate = 1.2; 
             utterance.onend = () => { isSpeaking = false; };
             window.speechSynthesis.speak(utterance);
         }
 
-        // 简易翻译字典
         function translate(label) {
             const dict = { 'person': '人', 'car': '汽车', 'chair': '椅子', 'cup': '杯子', 'bottle': '瓶子', 'cell phone': '手机', 'laptop': '电脑', 'dog': '狗' };
             return dict[label] || label;
